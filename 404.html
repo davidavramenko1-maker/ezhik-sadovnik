@@ -1,0 +1,133 @@
+<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Ёжик-Садовник</title>
+<style>
+html,body{margin:0;height:100%;overflow:hidden;background:#bfe9ff;font-family:"Trebuchet MS",Verdana,sans-serif;touch-action:none;user-select:none}
+canvas{display:block;width:100vw;height:100vh}
+.scr{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(255,248,225,.55)}
+.card{background:#fffdf3;border:5px solid #ffb74d;border-radius:28px;padding:22px 30px;max-width:520px;text-align:center;box-shadow:0 10px 30px rgba(0,0,0,.2);color:#5d4037}
+h1{margin:4px 0 8px;color:#e65100;font-size:2.4em}
+ol{text-align:left;line-height:1.6;font-size:1.05em}
+button{font:inherit;font-size:1.4em;padding:12px 34px;border:none;border-radius:40px;background:#66bb6a;color:#fff;cursor:pointer;box-shadow:0 5px 0 #388e3c;margin:6px}
+button:active{transform:translateY(3px);box-shadow:0 2px 0 #388e3c}
+.hud{position:fixed;top:10px;right:10px;display:flex;gap:8px}
+.hud button{font-size:1.3em;padding:8px 14px;background:#ffb74d;box-shadow:0 4px 0 #e65100}
+.hidden{display:none!important}.stats{font-size:.95em;color:#795548}
+</style></head><body>
+<canvas id="c"></canvas>
+<div class="hud" id="hud"><button id="bSnd" title="Звук">🔊</button><button id="bPause" title="Пауза">⏸</button></div>
+<div class="scr" id="menu"><div class="card">
+<h1>🦔 Ёжик-Садовник</h1>
+<p>Помоги ёжику собрать урожай для всех лесных друзей!</p>
+<ol><li>Двигай ёжика с корзинкой: пальцем, мышкой или стрелками ← →.</li>
+<li>Лови яблоки, груши, ягоды и звёздочки ⭐.</li>
+<li>Не лови шишки — от них ёжик чихает и замедляется.</li>
+<li>Собери нужное число фруктов — и откроется новая полянка!</li></ol>
+<button id="bPlay">▶ Играть</button>
+<p class="stats" id="stats"></p></div></div>
+<div class="scr hidden" id="pause"><div class="card"><h1>Пауза</h1><p>Ёжик отдыхает ☕</p>
+<button id="bResume">▶ Продолжить</button><button id="bMenu" style="background:#90a4ae;box-shadow:0 5px 0 #546e7a">Меню</button></div></div>
+<div class="scr hidden" id="over"><div class="card"><h1 id="overT">Урожай собран!</h1><p id="overP"></p>
+<button id="bAgain">↻ Ещё раз</button></div></div>
+<script>
+const cv=document.getElementById('c'),cx=cv.getContext('2d');let W,H,DPR;
+function rs(){DPR=window.devicePixelRatio||1;W=innerWidth;H=innerHeight;cv.width=W*DPR;cv.height=H*DPR;cx.setTransform(DPR,0,0,DPR,0,0)}addEventListener('resize',rs);rs();
+const $=id=>document.getElementById(id);
+// ---- storage
+const KEY='hedgehog-gardener-v1';let S={best:0,bestLevel:1,games:0,fruits:0,stars:0};
+try{Object.assign(S,JSON.parse(localStorage.getItem(KEY)||'{}'))}catch(e){}
+function save(){try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){}}
+function showStats(){$('stats').innerHTML=`🏆 Рекорд: <b>${S.best}</b> · Лучшая полянка: ${S.bestLevel}<br>Игр: ${S.games} · Всего фруктов: ${S.fruits} · Звёздочек: ${S.stars}`}
+// ---- audio
+let AC=null,sound=S.sound!==false,musicT=null,mstep=0;
+function ac(){if(!AC){try{AC=new(window.AudioContext||window.webkitAudioContext)()}catch(e){}}if(AC&&AC.state==='suspended')AC.resume();return AC}
+function tone(f,d,type='sine',v=.15,t0=0,slide=0){if(!sound||!ac())return;const t=AC.currentTime+t0,o=AC.createOscillator(),g=AC.createGain();o.type=type;o.frequency.setValueAtTime(f,t);if(slide)o.frequency.exponentialRampToValueAtTime(slide,t+d);g.gain.setValueAtTime(v,t);g.gain.exponentialRampToValueAtTime(.001,t+d);o.connect(g).connect(AC.destination);o.start(t);o.stop(t+d+.02)}
+const sfx={catch:()=>{tone(660,.1,'triangle');tone(990,.12,'triangle',.12,.06)},star:()=>[784,988,1175,1568].forEach((f,i)=>tone(f,.15,'sine',.12,i*.06)),
+cone:()=>tone(300,.3,'square',.06,0,120),miss:()=>tone(400,.25,'sine',.1,0,200),level:()=>[523,659,784,1047,784,1047].forEach((f,i)=>tone(f,.18,'triangle',.13,i*.1)),over:()=>[523,440,392,523].forEach((f,i)=>tone(f,.25,'triangle',.12,i*.15))};
+const MEL=[523,659,784,659,587,698,880,698,523,659,784,1047,988,784,659,0];
+function music(on){clearInterval(musicT);musicT=null;if(on)musicT=setInterval(()=>{if(state!=='play')return;const f=MEL[mstep++%MEL.length];if(f)tone(f/2,.25,'sine',.04);if(mstep%4==1)tone(131,.3,'triangle',.04)},260)}
+function setSnd(){$('bSnd').textContent=sound?'🔊':'🔇';S.sound=sound;save()}setSnd();
+$('bSnd').onclick=()=>{sound=!sound;setSnd();if(sound)ac()};
+// ---- levels (each adds something new)
+const LV=[
+{name:'Яблоневый сад',goal:10,speed:110,rate:1.2,kinds:['apple'],sky:['#bfe9ff','#e8f8ff'],grass:'#8bd96b'},
+{name:'Грушевая роща',goal:14,speed:130,rate:1.0,kinds:['apple','pear'],cone:.12,sky:['#c8f0ff','#fff6e0'],grass:'#7fcf5f'},
+{name:'Ветреный холм',goal:16,speed:140,rate:.95,kinds:['apple','pear','plum'],cone:.15,wind:60,sky:['#b3e5fc','#e1f5fe'],grass:'#9ccc65'},
+{name:'Ягодная поляна',goal:20,speed:150,rate:.8,kinds:['berry','apple','plum'],cone:.18,bounce:true,sky:['#ffe0f0','#fff8e1'],grass:'#81c784'},
+{name:'Закатный сад',goal:22,speed:165,rate:.75,kinds:['apple','pear','plum','berry'],cone:.2,wind:90,zig:true,sky:['#ffcc80','#ffe0b2'],grass:'#7cb342'},
+{name:'Звёздная ночь',goal:25,speed:175,rate:.7,kinds:['apple','pear','plum','berry'],cone:.22,zig:true,firefly:true,sky:['#283593','#5c6bc0'],grass:'#558b2f'}];
+function lv(n){if(n<LV.length)return LV[n];const b=LV[2+(n%4)];return Object.assign({},b,{name:b.name+' '+(Math.floor(n/4)+1)+'★',goal:25+n*2,speed:175+n*8,rate:Math.max(.45,.7-n*.02),cone:Math.min(.3,.2+n*.01),wind:(b.wind||50)+n*3,zig:true})}
+const COL={apple:'#e53935',pear:'#c0ca33',plum:'#8e24aa',berry:'#d81b60'};
+// ---- state
+let state='menu',G;const keys={};
+function newGame(){G={lvl:0,score:0,caught:0,lives:5,x:W/2,tx:null,items:[],parts:[],t:0,spawn:0,slow:0,banner:2.5,stars:0,fr:0};S.games++;save()}
+function start(){ac();newGame();state='play';hide();music(true)}
+function hide(){['menu','pause','over'].forEach(i=>$(i).classList.add('hidden'))}
+function pause(){if(state==='play'){state='pause';$('pause').classList.remove('hidden')}else if(state==='pause'){state='play';hide()}}
+function toMenu(){state='menu';hide();showStats();$('menu').classList.remove('hidden')}
+$('bPlay').onclick=start;$('bAgain').onclick=start;$('bPause').onclick=pause;$('bResume').onclick=pause;$('bMenu').onclick=toMenu;
+addEventListener('keydown',e=>{keys[e.key]=1;if(e.key==='Escape'||e.key==='p'||e.key==='P'||e.key==='з'||e.key==='З')pause();if((e.key==='Enter'||e.key===' ')&&state!=='play'&&state!=='pause'){e.preventDefault();start()}});
+addEventListener('keyup',e=>keys[e.key]=0);
+function ptr(e){if(state==='play'&&G)G.tx=e.clientX}
+cv.addEventListener('pointerdown',ptr);cv.addEventListener('pointermove',e=>{if(e.pointerType==='mouse'||e.buttons)ptr(e)});
+document.addEventListener('visibilitychange',()=>{if(document.hidden&&state==='play')pause()});
+function end(){state='over';music(false);sfx.over();const nb=G.score>S.best;if(nb)S.best=G.score;S.bestLevel=Math.max(S.bestLevel,G.lvl+1);S.fruits+=G.fr;S.stars+=G.stars;save();
+$('overT').textContent=nb?'🏆 Новый рекорд!':'Урожай собран!';$('overP').innerHTML=`Очки: <b>${G.score}</b><br>Полянка: ${G.lvl+1} — ${lv(G.lvl).name}<br>Фруктов: ${G.fr}, звёздочек: ${G.stars}<br>Лесные друзья говорят спасибо! 💛`;$('over').classList.remove('hidden')}
+// ---- spawn/update
+function spawn(L){const r=Math.random();let k;if(r<.06)k='star';else if(r<.06+(L.cone||0))k='cone';else k=L.kinds[Math.random()*L.kinds.length|0];
+G.items.push({k,x:40+Math.random()*(W-80),y:-30,vx:0,vy:L.speed*(.8+Math.random()*.4)*(k==='star'?1.2:1),ph:Math.random()*6,r:k==='berry'?14:20,b:L.bounce&&k!=='cone'&&Math.random()<.4})}
+function puff(x,y,c,n=10){for(let i=0;i<n;i++)G.parts.push({x,y,vx:(Math.random()-.5)*220,vy:-Math.random()*220,l:.8,c})}
+function update(dt){const L=lv(G.lvl);G.t+=dt;G.banner-=dt;G.slow-=dt;const sp=(G.slow>0?220:520)*Math.min(1.6,W/700+.4);
+let mv=0;if(keys.ArrowLeft||keys.a||keys['ф'])mv=-1;if(keys.ArrowRight||keys.d||keys['в'])mv=1;if(mv){G.tx=null;G.x+=mv*sp*dt}
+else if(G.tx!=null){const d=G.tx-G.x;G.x+=Math.sign(d)*Math.min(Math.abs(d),sp*1.4*dt)}G.x=Math.max(50,Math.min(W-50,G.x));
+if(G.banner<1.2){G.spawn-=dt;if(G.spawn<=0){spawn(L);G.spawn=L.rate*(.7+Math.random()*.6)}}
+const gy=H-70,wind=L.wind?Math.sin(G.t*.5)*L.wind:0;
+for(const it of G.items){it.ph+=dt;it.vx=wind+(L.zig&&it.k!=='cone'?Math.sin(it.ph*3)*70:0);it.x+=it.vx*dt;it.y+=it.vy*dt;if(it.x<20||it.x>W-20)it.x=Math.max(20,Math.min(W-20,it.x));
+if(it.y>gy-40&&it.y<gy+5&&Math.abs(it.x-G.x)<55){it.dead=1;
+ if(it.k==='cone'){G.slow=1.6;sfx.cone();puff(it.x,it.y,'#8d6e63')}
+ else if(it.k==='star'){G.score+=50;G.stars++;G.lives=Math.min(5,G.lives+1);sfx.star();puff(it.x,it.y,'#ffd600',18)}
+ else{G.score+=10*(G.lvl+1);G.caught++;G.fr++;sfx.catch();puff(it.x,it.y,COL[it.k])}}
+else if(it.y>H-20){if(it.b&&!it.bb){it.bb=1;it.vy=-it.vy*.7;it.y=H-21}else{it.dead=1;if(it.k!=='cone'&&it.k!=='star'){G.lives--;sfx.miss()}}}
+if(it.bb)it.vy+=400*dt}
+G.items=G.items.filter(i=>!i.dead);
+for(const p of G.parts){p.x+=p.vx*dt;p.y+=p.vy*dt;p.vy+=500*dt;p.l-=dt}G.parts=G.parts.filter(p=>p.l>0);
+if(G.caught>=L.goal){G.lvl++;G.caught=0;G.banner=2.5;G.items=[];G.score+=100;sfx.level();puff(W/2,H/2,'#ffd600',30)}
+if(G.lives<=0)end()}
+// ---- draw
+function fruit(k,x,y,r,t){cx.save();cx.translate(x,y);
+if(k==='star'){cx.rotate(t*2);cx.fillStyle='#ffd600';cx.strokeStyle='#ff8f00';cx.lineWidth=3;cx.beginPath();for(let i=0;i<10;i++){const a=i*Math.PI/5-Math.PI/2,rr=i%2?r*.45:r;cx.lineTo(Math.cos(a)*rr,Math.sin(a)*rr)}cx.closePath();cx.fill();cx.stroke()}
+else if(k==='cone'){cx.fillStyle='#8d6e63';cx.beginPath();cx.ellipse(0,0,r*.6,r,0,0,7);cx.fill();cx.strokeStyle='#5d4037';cx.lineWidth=2;for(let i=-2;i<=2;i++){cx.beginPath();cx.moveTo(-r*.6,i*6);cx.lineTo(r*.6,i*6+4);cx.stroke()}}
+else{cx.fillStyle=COL[k];cx.beginPath();if(k==='pear'){cx.ellipse(0,5,r*.8,r*.8,0,0,7);cx.ellipse(0,-8,r*.5,r*.55,0,0,7)}else cx.arc(0,0,r,0,7);cx.fill();
+cx.fillStyle='rgba(255,255,255,.5)';cx.beginPath();cx.arc(-r*.35,-r*.3,r*.25,0,7);cx.fill();
+cx.strokeStyle='#6d4c41';cx.lineWidth=3;cx.beginPath();cx.moveTo(0,-r*.8);cx.lineTo(2,-r-8);cx.stroke();cx.fillStyle='#43a047';cx.beginPath();cx.ellipse(8,-r-4,8,4,.4,0,7);cx.fill()}
+cx.restore()}
+function hog(x,y,t){cx.save();cx.translate(x,y);const bob=Math.sin(t*8)*2;
+cx.fillStyle='#5d4037';for(let i=0;i<9;i++){const a=Math.PI+i*Math.PI/8;cx.beginPath();cx.moveTo(Math.cos(a)*30,Math.sin(a)*24+bob);cx.lineTo(Math.cos(a)*48,Math.sin(a)*40+bob);cx.lineTo(Math.cos(a+.3)*30,Math.sin(a+.3)*24+bob);cx.fill()}
+cx.fillStyle='#a1887f';cx.beginPath();cx.ellipse(0,bob,36,28,0,0,7);cx.fill();
+cx.fillStyle='#ffe0b2';cx.beginPath();cx.ellipse(22,8+bob,18,14,0,0,7);cx.fill();
+cx.fillStyle='#000';cx.beginPath();cx.arc(40,6+bob,4,0,7);cx.fill();cx.beginPath();cx.arc(24,0+bob,3,0,7);cx.fill();
+cx.fillStyle='#ff8a80';cx.beginPath();cx.arc(28,12+bob,4,0,7);cx.fill();
+if(G.slow>0){cx.fillStyle='#fff';cx.font='20px sans-serif';cx.fillText('апчхи!',10,-50)}
+// basket
+cx.fillStyle='#d7a15b';cx.strokeStyle='#8d6e63';cx.lineWidth=3;cx.beginPath();cx.moveTo(-48,-40);cx.lineTo(48,-40);cx.lineTo(36,-10);cx.lineTo(-36,-10);cx.closePath();cx.fill();cx.stroke();
+cx.beginPath();cx.moveTo(-40,-28);cx.lineTo(40,-28);cx.moveTo(-38,-18);cx.lineTo(38,-18);cx.stroke();cx.restore()}
+function draw(){const L=G?lv(G.lvl):LV[0],t=performance.now()/1000;const g=cx.createLinearGradient(0,0,0,H);g.addColorStop(0,L.sky[0]);g.addColorStop(1,L.sky[1]);cx.fillStyle=g;cx.fillRect(0,0,W,H);
+if(L.firefly){cx.fillStyle='#fff9c4';for(let i=0;i<40;i++){cx.globalAlpha=.5+.5*Math.sin(t*2+i);cx.beginPath();cx.arc((i*137)%W,(i*71)%(H*.6),2,0,7);cx.fill()}cx.globalAlpha=1;cx.fillStyle='#fffde7';cx.beginPath();cx.arc(W*.8,80,35,0,7);cx.fill()}
+else{cx.fillStyle='#fff176';cx.beginPath();cx.arc(W-80,80,40,0,7);cx.fill();cx.fillStyle='rgba(255,255,255,.9)';for(let i=0;i<3;i++){const x=((t*15+i*300)%(W+200))-100;cx.beginPath();cx.arc(x,90+i*40,25,0,7);cx.arc(x+25,80+i*40,30,0,7);cx.arc(x+55,90+i*40,22,0,7);cx.fill()}}
+// trees
+for(let i=0;i<4;i++){const x=W*(i+.5)/4;cx.fillStyle='#795548';cx.fillRect(x-10,H*.35,20,H*.5);cx.fillStyle=L.firefly?'#2e7d32':'#66bb6a';[[0,.3,70],[-50,.36,45],[50,.36,45]].forEach(c=>{cx.beginPath();cx.arc(x+c[0],H*c[1],c[2],0,7);cx.fill()})}
+cx.fillStyle=L.grass;cx.fillRect(0,H-50,W,50);cx.fillStyle='rgba(255,255,255,.7)';for(let i=0;i<W;i+=60){cx.beginPath();cx.arc(i+20,H-30,4,0,7);cx.fill()}
+if(!G)return;
+for(const it of G.items)fruit(it.k,it.x,it.y,it.r,t);hog(G.x,H-70,state==='play'?G.t:0);
+for(const p of G.parts){cx.globalAlpha=Math.max(0,p.l);cx.fillStyle=p.c;cx.beginPath();cx.arc(p.x,p.y,5,0,7);cx.fill()}cx.globalAlpha=1;
+// HUD
+cx.fillStyle='rgba(255,253,243,.85)';cx.beginPath();cx.roundRect?cx.roundRect(10,10,250,78,16):cx.rect(10,10,250,78);cx.fill();
+cx.fillStyle='#5d4037';cx.font='bold 18px Trebuchet MS,sans-serif';cx.textAlign='left';cx.fillText('Очки: '+G.score+'   Полянка '+(G.lvl+1),22,34);
+cx.fillText('🍎 '+G.caught+' / '+L.goal,22,58);cx.fillText('❤'.repeat(Math.max(0,G.lives))+'♡'.repeat(Math.max(0,5-G.lives)),130,58);
+cx.fillStyle='#ffe0b2';cx.fillRect(22,68,226,10);cx.fillStyle='#66bb6a';cx.fillRect(22,68,226*Math.min(1,G.caught/L.goal),10);
+if(G.banner>0){cx.globalAlpha=Math.min(1,G.banner);cx.textAlign='center';cx.font='bold 40px Trebuchet MS,sans-serif';cx.fillStyle='#fff';cx.strokeStyle='#e65100';cx.lineWidth=6;
+const s1='Полянка '+(G.lvl+1)+': '+L.name;cx.strokeText(s1,W/2,H*.4);cx.fillText(s1,W/2,H*.4);cx.font='bold 22px Trebuchet MS,sans-serif';const s2='Собери '+L.goal+' фруктов'+(L.wind?' · дует ветер!':'')+(L.bounce?' · ягоды прыгают!':'')+(L.cone&&G.lvl==1?' · осторожно, шишки!':'');cx.lineWidth=4;cx.strokeText(s2,W/2,H*.4+40);cx.fillText(s2,W/2,H*.4+40);cx.globalAlpha=1}}
+let last=performance.now();function loop(n){const dt=Math.min(.05,(n-last)/1000);last=n;if(state==='play')update(dt);draw();requestAnimationFrame(loop)}
+showStats();requestAnimationFrame(loop);
+window.__game={get G(){return G},get state(){return state},lv};
+</script></body></html>
